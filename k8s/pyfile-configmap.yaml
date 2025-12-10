@@ -1,0 +1,109 @@
+apiVersion: v1
+data:
+  pyfile: |-
+    import time
+    from typing import Any, Dict
+    from collections import deque
+
+
+    def handler(input_data: Dict[str, Any], context: Any) -> Dict[str, Any]:
+        """
+        Serverless function to process resource usage measurements.
+
+        Args:
+            input_data: Dictionary containing resource usage measurements
+            context: Object containing context information
+
+        Returns:
+            Dictionary with computed metrics
+        """
+
+        # Initialize environment if not present
+        if not hasattr(context, 'env'):
+            context.env = {}
+
+        if 'cpu_util_history' not in context.env:
+            context.env['cpu_util_history'] = {}
+
+        if 'cpu_timestamps' not in context.env:
+            context.env['cpu_timestamps'] = {}
+
+        # Count number of CPUs
+        cpu_keys = [key for key in input_data.keys() if key.startswith('cpu_percent-')]
+        p_cpus = len(cpu_keys)
+
+        # Initialize results dictionary
+        results = {}
+
+        # 1. Compute percentage of outgoing traffic bytes
+        bytes_sent = input_data.get('net_io_counters_eth0-bytes_sent1', 0)
+        bytes_recv = input_data.get('net_io_counters_eth0-bytes_recv1', 0)
+
+        total_bytes = bytes_sent + bytes_recv
+        if total_bytes > 0:
+            percent_outgoing = (bytes_sent / total_bytes) * 100
+        else:
+            percent_outgoing = 0.0
+
+        results['percent-network-egress'] = percent_outgoing
+
+        # 2. Compute percentage of memory caching content
+        buffers = input_data.get('virtual_memory-buffers', 0)
+        cached = input_data.get('virtual_memory-cached', 0)
+        total_memory = input_data.get('virtual_memory-total', 1)
+
+        if total_memory > 0:
+            percent_caching = ((buffers + cached) / total_memory) * 100
+        else:
+            percent_caching = 0.0
+
+        results['percent-memory-caching'] = percent_caching
+
+        # 3. Compute moving average utilization of each CPU over the last minute
+        current_time = time.time()
+
+        # Get current CPU utilizations
+        current_cpu_utils = {}
+        for i in range(p_cpus):
+            cpu_key = f'cpu_percent-{i}'
+            if cpu_key in input_data:
+                current_cpu_utils[i] = input_data[cpu_key]
+
+        # Initialize storage if needed
+        for cpu_id in current_cpu_utils.keys():
+            if cpu_id not in context.env['cpu_util_history']:
+                context.env['cpu_util_history'][cpu_id] = deque(maxlen=60)
+                context.env['cpu_timestamps'][cpu_id] = deque(maxlen=60)
+
+        # Add current readings to history
+        for cpu_id, util in current_cpu_utils.items():
+            context.env['cpu_util_history'][cpu_id].append(util)
+            context.env['cpu_timestamps'][cpu_id].append(current_time)
+
+        # Calculate 60-second moving averages
+        for cpu_id in current_cpu_utils.keys():
+            # Clean up old entries (older than 60 seconds)
+            timestamps = context.env['cpu_timestamps'][cpu_id]
+            history = context.env['cpu_util_history'][cpu_id]
+
+            while timestamps and current_time - timestamps[0] > 60:
+                timestamps.popleft()
+                if history:
+                    history.popleft()
+
+            # Calculate moving average
+            if history:
+                moving_avg = sum(history) / len(history)
+            else:
+                moving_avg = current_cpu_utils.get(cpu_id, 0.0)
+
+            results[f'avg-util-cpu{cpu_id}-60sec'] = moving_avg
+
+        # Add required P + 2 keys (P CPUs + 2 stateless metrics)
+        # We already have: percent-network-egress, percent-memory-caching, and avg-util-cpuX-60sec for each CPU
+
+        return results
+kind: ConfigMap
+metadata:
+  creationTimestamp: null
+  name: pyfile
