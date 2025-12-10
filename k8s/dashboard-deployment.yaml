@@ -1,0 +1,36 @@
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: dashboard-deployment
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: dashboard
+  template:
+    metadata:
+      labels:
+        app: dashboard
+    spec:
+      containers:
+      - name: dashboard
+        image: caiosgrossi/dashboard:v1
+        imagePullPolicy: Always
+        ports:
+        - containerPort: 50105
+        resources:
+          requests:
+            cpu: 100m
+            memory: 300Mi
+        env:
+        - name: REDIS_HOST
+          value: "192.168.121.171" # VM IP so container can reach Redis
+        - name: REDIS_PORT
+          value: "6379"
+        - name: REDIS_DB
+          value: "0"
+        - name: REDIS_KEY
+          value: "anatheobald-proj3-output"
+        - name: REFRESH_MS
+          value: "5000"
